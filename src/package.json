@@ -169,6 +169,11 @@
 				"command": "zoo-code.toggleAutoApprove",
 				"title": "%command.toggleAutoApprove.title%",
 				"category": "%configuration.title%"
+			},
+			{
+				"command": "zoo-code.chatClear",
+				"title": "Zoo Code: Clear Chat History",
+				"category": "Zoo Code"
 			}
 		],
 		"menus": {
@@ -436,7 +441,22 @@
 					"markdownDescription": "%settings.workspace.rootResolution.description%"
 				}
 			}
-		}
+		},
+		"chatParticipants": [
+			{
+				"id": "zoo-code.chat",
+				"name": "zoo-code",
+				"fullName": "Zoo Code",
+				"description": "Chat with Zoo Code AI assistant using your configured provider profiles",
+				"isSticky": true,
+				"commands": [
+					{
+						"name": "clear",
+						"description": "Clear the conversation history"
+					}
+				]
+			}
+		]
 	},
 	"scripts": {
 		"lint": "eslint . --ext=ts --max-warnings=0",

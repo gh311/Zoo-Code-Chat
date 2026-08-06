@@ -50,6 +50,7 @@ import {
 import { initializeI18n } from "./i18n"
 import { initializeModelCacheRefresh } from "./api/providers/fetchers/modelCache"
 import { initZooCodeAuth } from "./services/zoo-code-auth"
+import { ZooCodeChatParticipant } from "./integrations/chat/ZooCodeChatParticipant"
 
 /**
  * Built using https://github.com/microsoft/vscode-webview-ui-toolkit
@@ -239,6 +240,18 @@ export async function activate(context: vscode.ExtensionContext) {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
 	)
+
+	// ── Zoo Code Chat Participant ─────────────────────────────────────────
+	// Register @zoo-code in VSCode's native Chat panel (right side).
+	// Uses the same provider profiles configured in the Zoo Code sidebar.
+	const chatParticipant = new ZooCodeChatParticipant(
+		provider.providerSettingsManager,
+		provider.contextProxy,
+		outputChannel,
+	)
+	chatParticipant.activate(context)
+	context.subscriptions.push(chatParticipant)
+	// ── End Chat Participant ──────────────────────────────────────────────
 
 	// Check for worktree auto-open path (set when switching to a worktree)
 	await checkWorktreeAutoOpen(context, outputChannel)
