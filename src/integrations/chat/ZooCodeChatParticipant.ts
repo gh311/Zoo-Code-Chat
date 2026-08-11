@@ -18,6 +18,10 @@ import type { ProviderSettingsManager } from "../../core/config/ProviderSettings
  * The participant uses the currently active provider profile configured in
  * Zoo Code settings. All streaming, tool calls, and model routing work
  * exactly as they do in the sidebar — just in the native chat UI.
+ *
+ * Conversation history is sourced from VSCode's native ChatContext, which
+ * provides per-session isolation automatically. Cancellation is wired through
+ * an AbortController so the Stop button aborts the in-flight HTTP request.
  */
 
 const PARTICIPANT_ID = "zoo-code.chat"
@@ -27,7 +31,6 @@ export class ZooCodeChatParticipant {
 	private contextProxy: ContextProxy
 	private participant: vscode.ChatParticipant | undefined
 	private disposables: vscode.Disposable[] = []
-	private conversationHistory: Anthropic.Messages.MessageParam[] = []
 	private outputChannel: vscode.OutputChannel
 
 	constructor(
@@ -48,11 +51,12 @@ export class ZooCodeChatParticipant {
 
 		this.disposables.push(this.participant)
 
-		// Slash command: /clear — reset conversation
+		// Slash command: /clear — VS Code manages history natively; just inform the user
 		this.disposables.push(
 			vscode.commands.registerCommand("zoo-code.chatClear", () => {
-				this.conversationHistory = []
-				vscode.window.showInformationMessage("Zoo Code: Chat history cleared.")
+				vscode.window.showInformationMessage(
+					"Zoo Code: Use the New Chat button in the Chat panel to start a fresh conversation.",
+				)
 			}),
 		)
 	}
@@ -80,23 +84,56 @@ export class ZooCodeChatParticipant {
 		}
 	}
 
+	/**
+	 * Build conversation history from VS Code's native ChatContext.
+	 *
+	 * ChatContext.history is scoped per chat session, so each conversation
+	 * has isolated context — unlike a shared in-memory array.
+	 */
+	private buildHistoryFromContext(chatContext: vscode.ChatContext): Anthropic.Messages.MessageParam[] {
+		const history: Anthropic.Messages.MessageParam[] = []
+
+		for (const turn of chatContext.history) {
+			if (turn instanceof vscode.ChatRequestTurn) {
+				if (turn.prompt.trim()) {
+					history.push({ role: "user", content: turn.prompt })
+				}
+			} else if (turn instanceof vscode.ChatResponseTurn) {
+				// Extract markdown text from response parts
+				const text = turn.response
+					.filter((part) => part instanceof vscode.ChatResponseMarkdownPart)
+					.map((part) => (part as vscode.ChatResponseMarkdownPart).value.value)
+					.join("\n")
+					.trim()
+
+				if (text) {
+					history.push({ role: "assistant", content: text })
+				}
+			}
+		}
+
+		return history
+	}
+
 	private async handleRequest(
 		request: vscode.ChatRequest,
-		_response: vscode.ChatContext,
+		chatContext: vscode.ChatContext,
 		stream: vscode.ChatResponseStream,
 		token: vscode.CancellationToken,
 	): Promise<vscode.ChatResult> {
 		const userMessage = request.prompt
 
-		if (!userMessage.trim()) {
+		if (!userMessage.trim() && !request.command) {
 			stream.markdown("Type a message to chat with Zoo Code.\n\nExample: `@zoo-code Explain this codebase`")
 			return {}
 		}
 
-		// /clear slash command
+		// /clear slash command — VS Code manages history natively
 		if (request.command === "clear") {
-			this.conversationHistory = []
-			stream.markdown("✅ Chat history cleared.")
+			stream.markdown(
+				"The Chat panel keeps full conversation history automatically. " +
+					"Use the **New Chat** button at the top of the panel to start fresh.",
+			)
 			return {}
 		}
 
@@ -133,8 +170,9 @@ export class ZooCodeChatParticipant {
 
 		const fullMessage = contextParts.length > 0 ? `${userMessage}${contextParts.join("\n")}` : userMessage
 
-		// Add user message to conversation history
-		this.conversationHistory.push({ role: "user", content: fullMessage })
+		// Build conversation history from VS Code's native per-session context
+		const history = this.buildHistoryFromContext(chatContext)
+		history.push({ role: "user", content: fullMessage })
 
 		// Build the API handler using Zoo Code's existing provider system
 		const handler: ApiHandler = buildApiHandler(providerSettings)
@@ -148,9 +186,15 @@ export class ZooCodeChatParticipant {
 			"Provide helpful, concise answers about code and development. " +
 			"When the user shares file content, analyze it in context."
 
+		// Wire CancellationToken to AbortController so the Stop button
+		// aborts the in-flight provider HTTP request, not just the local loop.
+		const abortController = new AbortController()
+		const cancelSub = token.onCancellationRequested(() => abortController.abort())
+
 		// Stream the response
-		const apiStream: ApiStream = handler.createMessage(systemPrompt, [...this.conversationHistory], {
+		const apiStream: ApiStream = handler.createMessage(systemPrompt, [...history], {
 			taskId: `chat-${Date.now()}`,
+			abortSignal: abortController.signal,
 		})
 
 		let fullResponse = ""
@@ -158,7 +202,6 @@ export class ZooCodeChatParticipant {
 		try {
 			for await (const chunk of apiStream) {
 				if (token.isCancellationRequested) {
-					handler.getModel() // touch to prevent tree-shake
 					break
 				}
 
@@ -200,19 +243,11 @@ export class ZooCodeChatParticipant {
 			const msg = error instanceof Error ? error.message : String(error)
 			stream.markdown(`\n\n❌ **Stream error:** ${msg}`)
 			this.outputChannel.appendLine(`[ZooCodeChat] Stream error: ${msg}`)
-		}
-
-		// Add assistant response to history
-		if (fullResponse.trim()) {
-			this.conversationHistory.push({ role: "assistant", content: fullResponse })
+		} finally {
+			cancelSub.dispose()
 		}
 
 		return {}
-	}
-
-	/** Clear conversation history (e.g. when switching chat sessions). */
-	clearHistory(): void {
-		this.conversationHistory = []
 	}
 
 	dispose(): void {
