@@ -1199,6 +1199,11 @@
 			"count": 1
 		}
 	},
+	"integrations/chat/__tests__/ZooCodeChatParticipant.spec.ts": {
+		"@typescript-eslint/no-explicit-any": {
+			"count": 21
+		}
+	},
 	"integrations/editor/DiffViewProvider.ts": {
 		"@typescript-eslint/no-explicit-any": {
 			"count": 1
