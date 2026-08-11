@@ -7,6 +7,13 @@ import { ApiStream } from "../../api/transform/stream"
 import type { ProviderSettings } from "@roo-code/types"
 import type { ContextProxy } from "../../core/config/ContextProxy"
 import type { ProviderSettingsManager } from "../../core/config/ProviderSettingsManager"
+import { modes, getModeBySlug } from "../../shared/modes"
+
+/** Built-in mode slugs that can be selected via slash commands. */
+const MODE_COMMANDS = new Set(["code", "architect", "ask", "debug"])
+
+/** Default mode when none has been selected. */
+const DEFAULT_MODE = "code"
 
 /**
  * VSCode native Chat participant that routes messages through Zoo Code's
@@ -137,6 +144,23 @@ export class ZooCodeChatParticipant {
 			return {}
 		}
 
+		// Determine the active mode: from the current request's slash command,
+		// or from the most recent mode command in chat history.
+		const modeFromCommand = request.command && MODE_COMMANDS.has(request.command) ? request.command : undefined
+		const activeMode = modeFromCommand || this.getLastModeFromHistory(chatContext) || DEFAULT_MODE
+		const modeConfig = getModeBySlug(activeMode) || modes[0]
+
+		// If this is a mode-switch command (with or without a message), confirm the switch
+		if (modeFromCommand) {
+			stream.markdown(`_Mode: **${modeConfig.name}** — ${modeConfig.description}_\n\n`)
+
+			// If no message was typed, just confirm the mode switch without calling the API
+			if (!userMessage.trim()) {
+				stream.markdown(`Active mode is now **${modeConfig.name}**. Type a message to begin.`)
+				return {}
+			}
+		}
+
 		// Get the active provider settings
 		const providerSettings = await this.getActiveProviderSettings()
 
@@ -180,11 +204,8 @@ export class ZooCodeChatParticipant {
 
 		stream.markdown(`_Using: **${model.id}** via **${providerSettings.apiProvider}**_\n\n`)
 
-		// System prompt
-		const systemPrompt =
-			"You are Zoo Code, an AI coding assistant integrated into VSCode. " +
-			"Provide helpful, concise answers about code and development. " +
-			"When the user shares file content, analyze it in context."
+		// Build system prompt from the active mode's role definition + custom instructions
+		const systemPrompt = this.buildSystemPrompt(modeConfig)
 
 		// Wire CancellationToken to AbortController so the Stop button
 		// aborts the in-flight provider HTTP request, not just the local loop.
@@ -248,6 +269,43 @@ export class ZooCodeChatParticipant {
 		}
 
 		return {}
+	}
+
+	/**
+	 * Scan chat history backwards to find the most recently used mode command.
+	 * Returns undefined if no mode command was used yet.
+	 */
+	private getLastModeFromHistory(chatContext: vscode.ChatContext): string | undefined {
+		for (let i = chatContext.history.length - 1; i >= 0; i--) {
+			const turn = chatContext.history[i]
+			if (turn instanceof vscode.ChatRequestTurn && turn.command && MODE_COMMANDS.has(turn.command)) {
+				return turn.command
+			}
+		}
+		return undefined
+	}
+
+	/**
+	 * Build a system prompt from a Zoo Code mode configuration.
+	 * Uses the mode's role definition and any custom instructions.
+	 */
+	private buildSystemPrompt(modeConfig: { roleDefinition: string; customInstructions?: string }): string {
+		const parts: string[] = [modeConfig.roleDefinition]
+
+		if (modeConfig.customInstructions) {
+			parts.push(modeConfig.customInstructions)
+		}
+
+		// Add chat-mode-specific guidance (no tool/file-write capabilities here)
+		parts.push(
+			"\n## Chat Mode\n" +
+				"You are running in VSCode's native Chat panel. You can analyze, explain, " +
+				"and suggest code, but you cannot directly edit files or run commands. " +
+				"Provide code snippets in fenced code blocks. When the user shares file " +
+				"content via references, analyze it in context.",
+		)
+
+		return parts.join("\n\n")
 	}
 
 	dispose(): void {

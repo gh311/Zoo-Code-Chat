@@ -453,6 +453,22 @@
 					{
 						"name": "clear",
 						"description": "Clear the conversation history"
+					},
+					{
+						"name": "code",
+						"description": "Switch to Code mode (write, modify, refactor code)"
+					},
+					{
+						"name": "architect",
+						"description": "Switch to Architect mode (plan and design)"
+					},
+					{
+						"name": "ask",
+						"description": "Switch to Ask mode (explanations and answers)"
+					},
+					{
+						"name": "debug",
+						"description": "Switch to Debug mode (diagnose and fix)"
 					}
 				]
 			}
